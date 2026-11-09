@@ -1,0 +1,6 @@
+worker.js
+wrangler.toml
+.assetsignore
+README.md
+.git/**
+.github/**
