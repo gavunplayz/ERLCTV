@@ -70,7 +70,7 @@
     .creator-card{border:1px solid var(--line);border-radius:14px;background:#0d131d;padding:16px;display:flex;align-items:center;gap:11px}
     .creator-avatar{width:42px;height:42px;border-radius:50%;background:linear-gradient(145deg,#1b5ca0,#12233a);border:1px solid #2c5a8d;flex:none}
     .creator-name{font-size:12px;font-weight:750}.creator-meta{font-size:10px;color:#73859c;margin-top:2px}
-    .empty-strip{border:1px dashed #263c56;border-radius:14px;padding:19px;color:#778ba4;text-align:center;font-size:12px;background:#0b111a}
+    .empty-strip{border:1px dashed #263c56;border-radius:14px;padding:19px;color:#778ba4;text-align:center;font-size:12px;background:#0b111a}\n    .account-panel{border:1px solid #263c56;border-radius:15px;padding:20px;background:linear-gradient(120deg,#101b2b,#0c131e);display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}.account-copy{display:flex;align-items:center;gap:13px;min-width:0}.account-avatar{width:48px;height:48px;flex:none;border-radius:50%;background:#1b3555;border:1px solid #315b89;display:grid;place-items:center;overflow:hidden;color:#cfe5ff;font-weight:800}.account-avatar img{width:100%;height:100%;object-fit:cover}.account-title{font-weight:800}.account-subtitle{font-size:12px;color:#8b9bb0;margin-top:3px}.account-panel .btn{flex:none}
     footer{border-top:1px solid var(--line);padding:22px 34px;color:#65758a;font-size:11px;display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap}
     @media(max-width:1100px){.video-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.creator-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hero-art{right:4%;opacity:.5}}
     @media(max-width:760px){.topbar{height:62px;padding:0 15px;gap:12px}.brand{min-width:0;font-size:18px}.brand-mark{width:33px;height:33px}.search{max-width:none;height:38px}.top-actions .btn:not(.primary){display:none}.top-actions .btn{padding:9px 11px;font-size:12px}.layout{display:block}aside{display:none}main{padding:20px 15px 40px}.hero{padding:27px 23px;min-height:250px}.hero-art{right:-25px;top:60%;opacity:.2}.hero p{max-width:460px}.video-grid{gap:16px}.section-head{margin-top:25px}.creator-grid{grid-template-columns:repeat(2,minmax(0,1fr))}footer{padding:20px 15px}}
@@ -84,7 +84,7 @@
       <span>ER:LC TV<small>THE ER:LC COMMUNITY</small></span>
     </a>
     <label class="search"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg><input id="searchInput" type="search" placeholder="Search videos, creators and more..." aria-label="Search"></label>
-    <div class="top-actions"><a class="btn" href="#categories">Explore</a><a class="btn primary" href="#join">Create account</a></div>
+    <div class="top-actions"><a class="btn" href="#categories">Explore</a><a class="btn primary" id="authButton" href="/auth/discord">Sign in with Discord</a></div>
   </header>
   <div class="layout">
     <aside>
@@ -148,14 +148,96 @@
 
       <section id="join">
         <div class="section-head"><div><h2>Be part of the community</h2><div class="section-sub">Create an account to submit your ER:LC videos when submissions launch.</div></div></div>
-        <div class="empty-strip">Your account and video submission experience will be added in a future update.</div>
+        <div class="account-panel" id="accountPanel" aria-live="polite"><div class="account-copy"><div class="account-avatar">TV</div><div><div class="account-title">Sign in to ER:LC TV</div><div class="account-subtitle">Use your Discord account to create your creator identity.</div></div></div><a class="btn primary" href="/auth/discord">Continue with Discord</a></div>
       </section>
     </main>
   </div>
   <footer><span>© 2026 ER:LC TV · A community video discovery platform</span><span>Videos are hosted on YouTube. ER:LC TV does not upload or host video files.</span></footer>
   <script>
-    const searchInput=document.getElementById('searchInput');
-    searchInput.addEventListener('keydown',event=>{if(event.key==='Enter'&&searchInput.value.trim()){alert('Search will be available when video listings are connected.');}});
+    const searchInput = document.getElementById('searchInput');
+    searchInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && searchInput.value.trim()) {
+        alert('Search will be available when video listings are connected.');
+      }
+    });
+
+    const authButton = document.getElementById('authButton');
+    const accountPanel = document.getElementById('accountPanel');
+
+    function makeSignOutButton() {
+      const button = document.createElement('button');
+      button.className = 'btn';
+      button.type = 'button';
+      button.textContent = 'Sign out';
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        button.textContent = 'Signing out...';
+        try {
+          await fetch('/auth/logout', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          window.location.reload();
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = 'Sign out';
+          alert('Could not sign out. Please try again.');
+        }
+      });
+      return button;
+    }
+
+    function showSignedInUser(user) {
+      authButton.textContent = 'My account';
+      authButton.href = '#join';
+      const copy = document.createElement('div');
+      copy.className = 'account-copy';
+
+      const avatar = document.createElement('div');
+      avatar.className = 'account-avatar';
+      if (user.avatarUrl) {
+        const image = document.createElement('img');
+        image.src = user.avatarUrl;
+        image.alt = '';
+        image.referrerPolicy = 'no-referrer';
+        avatar.textContent = '';
+        avatar.appendChild(image);
+      } else {
+        avatar.textContent = (user.displayName || user.username || 'U').slice(0, 2).toUpperCase();
+      }
+
+      const details = document.createElement('div');
+      const title = document.createElement('div');
+      title.className = 'account-title';
+      title.textContent = user.displayName || user.username;
+      const subtitle = document.createElement('div');
+      subtitle.className = 'account-subtitle';
+      subtitle.textContent = '@' + user.username + ' · Discord connected';
+      details.append(title, subtitle);
+      copy.append(avatar, details);
+
+      accountPanel.replaceChildren(copy, makeSignOutButton());
+    }
+
+    async function loadAccount() {
+      try {
+        const response = await fetch('/auth/me', {
+          method: 'GET',
+          credentials: 'same-origin',
+          cache: 'no-store'
+        });
+        if (!response.ok) throw new Error('Account lookup failed');
+        const result = await response.json();
+        if (result.authenticated && result.user) {
+          showSignedInUser(result.user);
+        }
+      } catch (error) {
+        console.error('Could not load ER:LC TV account:', error);
+      }
+    }
+
+    loadAccount();
   </script>
 </body>
 </html>
