@@ -72,9 +72,24 @@ async function finishDiscordLogin(request, env) {
   const oauthError = url.searchParams.get("error");
 
   if (oauthError) {
-    return new Response("Discord sign-in was cancelled. You can close this page and try again.", {
+    return new Response("Discord sign-in was cancelled. You can return to ER:LC TV and try again.", {
       status: 400,
-      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Set-Cookie": clearCookie(STATE_COOKIE),
+        "Cache-Control": "no-store"
+      }
+    });
+  }
+
+  if (url.searchParams.get("iss") !== "https://discord.com") {
+    return new Response("The sign-in provider could not be verified. Please try again.", {
+      status: 400,
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Set-Cookie": clearCookie(STATE_COOKIE),
+        "Cache-Control": "no-store"
+      }
     });
   }
 
