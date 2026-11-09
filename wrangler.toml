@@ -1,0 +1,8 @@
+name = "erlctv"
+main = "worker.js"
+compatibility_date = "2026-11-09"
+
+[assets]
+directory = "."
+binding = "ASSETS"
+run_worker_first = ["/auth/*"]
