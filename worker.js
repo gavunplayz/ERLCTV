@@ -1,5 +1,5 @@
 const SITE_ORIGIN = "https://gavunplayz.github.io";
-const SITE_RETURN_URL = "https://gavunplayz.github.io/ERlCTV/";
+const SITE_RETURN_URL = "https://gavunplayz.github.io/ERLCTV/";
 const SESSION_SECONDS = 60 * 60 * 24 * 7;
 const STATE_COOKIE = "__Host-erlctv_oauth_state";
 const STATE_SECONDS = 60 * 10;
