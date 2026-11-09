@@ -149,9 +149,10 @@ async function finishDiscordLogin(request, env) {
   const session = await signSession(sessionUser, requiredEnv(env, "SESSION_SECRET"));
   const headers = new Headers({
     Location: "/",
-    "Set-Cookie": cookie(SESSION_COOKIE, session, SESSION_SECONDS) + ", " + clearCookie(STATE_COOKIE),
     "Cache-Control": "no-store"
   });
+  headers.append("Set-Cookie", cookie(SESSION_COOKIE, session, SESSION_SECONDS));
+  headers.append("Set-Cookie", clearCookie(STATE_COOKIE));
 
   return new Response(null, { status: 302, headers });
 }
