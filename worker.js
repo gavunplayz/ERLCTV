@@ -1,38 +1,36 @@
-const SESSION_COOKIE = "__Host-erlctv_session";
-const STATE_COOKIE = "__Host-erlctv_oauth_state";
+const SITE_ORIGIN = "https://gavunplayz.github.io";
+const SITE_RETURN_URL = "https://gavunplayz.github.io/ERlCTV/";
 const SESSION_SECONDS = 60 * 60 * 24 * 7;
+const STATE_COOKIE = "__Host-erlctv_oauth_state";
 const STATE_SECONDS = 60 * 10;
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    try {
-      if (url.pathname === "/auth/discord" && request.method === "GET") {
-        return startDiscordLogin(request, env);
+    if (url.pathname.startsWith("/auth/")) {
+      if (request.method === "OPTIONS") return corsPreflight(request);
+      try {
+        let response;
+        if (url.pathname === "/auth/discord" && request.method === "GET") {
+          response = await startDiscordLogin(request, env);
+        } else if (url.pathname === "/auth/callback" && request.method === "GET") {
+          response = await finishDiscordLogin(request, env);
+        } else if (url.pathname === "/auth/me" && request.method === "GET") {
+          response = await getCurrentUser(request, env);
+        } else if (url.pathname === "/auth/logout" && request.method === "POST") {
+          response = json({ success: true });
+        } else {
+          response = json({ error: "Not found" }, 404);
+        }
+        return addCorsHeaders(response, request);
+      } catch (error) {
+        console.error("ER:LC TV authentication error:", error);
+        return addCorsHeaders(json({ error: "Authentication service temporarily unavailable." }, 500), request);
       }
-
-      if (url.pathname === "/auth/callback" && request.method === "GET") {
-        return finishDiscordLogin(request, env);
-      }
-
-      if (url.pathname === "/auth/me" && request.method === "GET") {
-        return getCurrentUser(request, env);
-      }
-
-      if (url.pathname === "/auth/logout" && request.method === "POST") {
-        return logout(request);
-      }
-
-      if (url.pathname.startsWith("/auth/")) {
-        return json({ error: "Not found" }, 404);
-      }
-
-      return env.ASSETS.fetch(request);
-    } catch (error) {
-      console.error("ER:LC TV authentication error:", error);
-      return json({ error: "Authentication service temporarily unavailable." }, 500);
     }
+
+    return env.ASSETS.fetch(request);
   }
 };
 
@@ -40,6 +38,37 @@ function requiredEnv(env, name) {
   const value = env[name];
   if (!value) throw new Error(`Missing Worker secret: ${name}`);
   return value;
+}
+
+function corsPreflight(request) {
+  const origin = request.headers.get("Origin");
+  if (origin !== SITE_ORIGIN) return new Response(null, { status: 403 });
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": SITE_ORIGIN,
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Authorization, Content-Type",
+      "Access-Control-Max-Age": "86400",
+      "Vary": "Origin"
+    }
+  });
+}
+
+function addCorsHeaders(response, request) {
+  const headers = new Headers(response.headers);
+  const origin = request.headers.get("Origin");
+  if (origin === SITE_ORIGIN) {
+    headers.set("Access-Control-Allow-Origin", SITE_ORIGIN);
+    headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    headers.set("Vary", "Origin");
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
 }
 
 async function startDiscordLogin(request, env) {
@@ -58,7 +87,7 @@ async function startDiscordLogin(request, env) {
     status: 302,
     headers: {
       Location: authorizeUrl.toString(),
-      "Set-Cookie": cookie(STATE_COOKIE, state, STATE_SECONDS),
+      "Set-Cookie": stateCookie(state),
       "Cache-Control": "no-store"
     }
   });
@@ -72,35 +101,16 @@ async function finishDiscordLogin(request, env) {
   const oauthError = url.searchParams.get("error");
 
   if (oauthError) {
-    return new Response("Discord sign-in was cancelled. You can return to ER:LC TV and try again.", {
+    return new Response("Discord sign-in was cancelled. Return to ER:LC TV and try again.", {
       status: 400,
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Set-Cookie": clearCookie(STATE_COOKIE),
-        "Cache-Control": "no-store"
-      }
-    });
-  }
-
-  if (url.searchParams.get("iss") !== "https://discord.com") {
-    return new Response("The sign-in provider could not be verified. Please try again.", {
-      status: 400,
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Set-Cookie": clearCookie(STATE_COOKIE),
-        "Cache-Control": "no-store"
-      }
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Set-Cookie": clearStateCookie(), "Cache-Control": "no-store" }
     });
   }
 
   if (!code || !returnedState || !savedState || returnedState !== savedState) {
-    return new Response("Sign-in could not be verified. Please return to ER:LC TV and try again.", {
+    return new Response("Sign-in could not be verified. Return to ER:LC TV and try again.", {
       status: 400,
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Set-Cookie": clearCookie(STATE_COOKIE),
-        "Cache-Control": "no-store"
-      }
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Set-Cookie": clearStateCookie(), "Cache-Control": "no-store" }
     });
   }
 
@@ -123,34 +133,19 @@ async function finishDiscordLogin(request, env) {
   const tokenData = await tokenResponse.json();
   if (!tokenResponse.ok || !tokenData.access_token) {
     console.error("Discord token exchange failed:", tokenData.error || tokenResponse.status);
-    return new Response("Discord sign-in could not be completed. Please try again.", {
-      status: 502,
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Set-Cookie": clearCookie(STATE_COOKIE),
-        "Cache-Control": "no-store"
-      }
-    });
+    return new Response("Discord sign-in could not be completed. Please try again.", { status: 502 });
   }
 
   const userResponse = await fetch("https://discord.com/api/users/@me", {
     headers: { Authorization: `Bearer ${tokenData.access_token}` }
   });
-
   const discordUser = await userResponse.json();
+
   if (!userResponse.ok || !discordUser.id || !discordUser.username) {
     console.error("Discord profile request failed:", userResponse.status);
-    return new Response("We couldn't retrieve your Discord profile. Please try again.", {
-      status: 502,
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Set-Cookie": clearCookie(STATE_COOKIE),
-        "Cache-Control": "no-store"
-      }
-    });
+    return new Response("We couldn't retrieve your Discord profile. Please try again.", { status: 502 });
   }
 
-  // Only keep public profile details. The Discord access token is not stored.
   const sessionUser = {
     id: String(discordUser.id),
     username: String(discordUser.username),
@@ -162,30 +157,27 @@ async function finishDiscordLogin(request, env) {
   };
 
   const session = await signSession(sessionUser, requiredEnv(env, "SESSION_SECRET"));
-  const headers = new Headers({
-    Location: "/",
-    "Cache-Control": "no-store"
-  });
-  headers.append("Set-Cookie", cookie(SESSION_COOKIE, session, SESSION_SECONDS));
-  headers.append("Set-Cookie", clearCookie(STATE_COOKIE));
+  const returnUrl = new URL(SITE_RETURN_URL);
+  returnUrl.hash = new URLSearchParams({ session }).toString();
 
-  return new Response(null, { status: 302, headers });
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: returnUrl.toString(),
+      "Set-Cookie": clearStateCookie(),
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer"
+    }
+  });
 }
 
 async function getCurrentUser(request, env) {
-  const token = readCookie(request, SESSION_COOKIE);
-  if (!token) return json({ authenticated: false });
+  const authorization = request.headers.get("Authorization") || "";
+  const match = authorization.match(/^Bearer (.+)$/i);
+  if (!match) return json({ authenticated: false }, 401);
 
-  const user = await verifySession(token, requiredEnv(env, "SESSION_SECRET"));
-  if (!user) {
-    return new Response(JSON.stringify({ authenticated: false }), {
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        "Set-Cookie": clearCookie(SESSION_COOKIE),
-        "Cache-Control": "no-store"
-      }
-    });
-  }
+  const user = await verifySession(match[1], requiredEnv(env, "SESSION_SECRET"));
+  if (!user) return json({ authenticated: false }, 401);
 
   return json({
     authenticated: true,
@@ -194,20 +186,6 @@ async function getCurrentUser(request, env) {
       username: user.username,
       displayName: user.displayName,
       avatarUrl: user.avatarUrl
-    }
-  });
-}
-
-function logout(request) {
-  const origin = request.headers.get("Origin");
-  const ownOrigin = new URL(request.url).origin;
-  if (origin && origin !== ownOrigin) return json({ error: "Invalid request origin." }, 403);
-
-  return new Response(JSON.stringify({ success: true }), {
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Set-Cookie": clearCookie(SESSION_COOKIE),
-      "Cache-Control": "no-store"
     }
   });
 }
@@ -222,7 +200,6 @@ async function verifySession(token, secret) {
   try {
     const parts = token.split(".");
     if (parts.length !== 2) return null;
-
     const bodyBytes = base64UrlDecode(parts[0]);
     const signature = base64UrlDecode(parts[1]);
     const key = await crypto.subtle.importKey(
@@ -232,14 +209,10 @@ async function verifySession(token, secret) {
       false,
       ["verify"]
     );
-
     const valid = await crypto.subtle.verify("HMAC", key, signature, new TextEncoder().encode(parts[0]));
     if (!valid) return null;
-
     const payload = JSON.parse(new TextDecoder().decode(bodyBytes));
-    if (!payload.id || !payload.username || !payload.exp || payload.exp < Math.floor(Date.now() / 1000)) {
-      return null;
-    }
+    if (!payload.id || !payload.username || !payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
     return payload;
   } catch {
     return null;
@@ -258,8 +231,7 @@ async function hmacSign(value, secret) {
 }
 
 function randomToken(byteLength) {
-  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
-  return base64UrlEncode(bytes);
+  return base64UrlEncode(crypto.getRandomValues(new Uint8Array(byteLength)));
 }
 
 function base64UrlEncode(bytes) {
@@ -286,12 +258,12 @@ function readCookie(request, name) {
   return null;
 }
 
-function cookie(name, value, maxAge) {
-  return `${name}=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
+function stateCookie(value) {
+  return `${STATE_COOKIE}=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${STATE_SECONDS}`;
 }
 
-function clearCookie(name) {
-  return `${name}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+function clearStateCookie() {
+  return `${STATE_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
 }
 
 function json(data, status = 200) {
