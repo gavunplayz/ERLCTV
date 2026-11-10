@@ -188,18 +188,15 @@ async function beginChannelConnection(request, env) {
   googleUrl.searchParams.set("prompt", "consent");
   googleUrl.searchParams.set("include_granted_scopes", "true");
   googleUrl.searchParams.set("state", state);
-  const response = json({ authorizeUrl: googleUrl.toString() });
-  response.headers.set("Set-Cookie", cookie(YOUTUBE_STATE_COOKIE, state, STATE_SECONDS));
-  return response;
+  return json({ authorizeUrl: googleUrl.toString() });
 }
 
 async function finishYouTubeConnection(request, env) {
   const url = new URL(request.url);
   const state = url.searchParams.get("state");
   const code = url.searchParams.get("code");
-  const savedState = readCookie(request, YOUTUBE_STATE_COOKIE);
   if (url.searchParams.has("error")) return channelRedirect("google_cancelled");
-  if (!state || !code || !savedState || state !== savedState) return channelRedirect("google_state_error");
+  if (!state || !code) return channelRedirect("google_state_error");
 
   const db = requireDatabase(env);
   const stateHash = await sha256Hex(state);
@@ -247,12 +244,19 @@ async function finishYouTubeConnection(request, env) {
   const encryptedRefreshToken = await encryptRefreshToken(tokenData.refresh_token, requiredEnv(env, "YOUTUBE_TOKEN_ENCRYPTION_KEY"));
   const title = String(youtubeChannel.snippet?.title || "YouTube channel").slice(0, 100);
   const thumbnail = youtubeChannel.snippet?.thumbnails?.default?.url || null;
-  const insert = await db.prepare(
-    "INSERT INTO channels (id, owner_discord_id, name, slug, description, youtube_channel_id, youtube_channel_title, youtube_thumbnail_url, youtube_refresh_token_enc) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM channels WHERE owner_discord_id = ?) < 3"
-  ).bind(
-    pending.id, pending.owner_discord_id, pending.name, pending.slug, pending.description,
-    youtubeChannel.id, title, thumbnail, encryptedRefreshToken, pending.owner_discord_id
-  ).run();
+  let insert;
+  try {
+    insert = await db.prepare(
+      "INSERT INTO channels (id, owner_discord_id, name, slug, description, youtube_channel_id, youtube_channel_title, youtube_thumbnail_url, youtube_refresh_token_enc) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM channels WHERE owner_discord_id = ?) < 3"
+    ).bind(
+      pending.id, pending.owner_discord_id, pending.name, pending.slug, pending.description,
+      youtubeChannel.id, title, thumbnail, encryptedRefreshToken, pending.owner_discord_id
+    ).run();
+  } catch (error) {
+    console.error("Channel insert rejected (likely duplicate URL or YouTube account):", error);
+    await deletePending(db, pending.id);
+    return channelRedirect("channel_limit_or_taken");
+  }
   await deletePending(db, pending.id);
 
   if (Number(insert.meta?.changes || 0) !== 1) return channelRedirect("channel_limit_or_taken");
