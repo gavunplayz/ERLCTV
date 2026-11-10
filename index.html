@@ -267,7 +267,7 @@
         if (!response.ok) throw new Error(result.error || 'Could not load your channels.');
         channelList.replaceChildren();
         const channels = result.channels || [];
-        channelMessage.textContent = 'You have created ' + channels.length + ' of ' + (result.limit || 3) + ' channels.';
+        if (!returnedChannelStatus) channelMessage.textContent = 'You have created ' + channels.length + ' of ' + (result.limit || 3) + ' channels.';
         createChannelButton.disabled = channels.length >= 3;
         createChannelButton.textContent = channels.length >= 3 ? 'Channel limit reached (3/3)' : 'Create channel & connect YouTube';
         if (!channels.length) {
