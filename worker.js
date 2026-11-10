@@ -21,6 +21,7 @@ export default {
         else if (path === "/channels" && request.method === "GET") response = await listMyChannels(request, env);
         else if (path === "/channels/connect" && request.method === "POST") response = await beginChannelConnection(request, env);
         else if (path === "/channels/public" && request.method === "GET") response = await getPublicChannel(url, env);
+        else if (path === "/channels/owner" && (request.method === "GET" || request.method === "PATCH")) response = await manageChannel(request, url, env);
         else if (path === "/youtube/callback" && request.method === "GET") response = await finishYouTubeConnection(request, env);
         else response = json({ error: "Not found" }, 404);
         return addCorsHeaders(response, request);
@@ -272,6 +273,46 @@ async function getPublicChannel(url, env) {
   ).bind(slug).first();
   if (!channel) return json({ error: "Channel not found." }, 404);
   return json({ channel });
+}
+
+
+async function manageChannel(request, url, env) {
+  const user = await authenticatedUser(request, env);
+  if (!user) return json({ error: "Please sign in with Discord first." }, 401);
+  const slug = makeSlug(url.searchParams.get("slug") || "");
+  if (!slug) return json({ error: "A channel URL is required." }, 400);
+  const db = requireDatabase(env);
+
+  if (request.method === "GET") {
+    const channel = await db.prepare(
+      "SELECT id, name, slug, description, youtube_channel_id, youtube_channel_title, youtube_thumbnail_url, created_at FROM channels WHERE slug = ? AND owner_discord_id = ? LIMIT 1"
+    ).bind(slug, user.id).first();
+    if (!channel) return json({ error: "Channel not found, or you do not own it." }, 404);
+    return json({ channel });
+  }
+
+  let body;
+  try { body = await request.json(); } catch { return json({ error: "Please enter valid channel details." }, 400); }
+  const name = String(body.name || "").trim();
+  const description = String(body.description || "").trim();
+  const newSlug = makeSlug(body.slug || "");
+  if (name.length < 2 || name.length > 40) return json({ error: "Channel name must be between 2 and 40 characters." }, 400);
+  if (description.length > 160) return json({ error: "Description must be 160 characters or fewer." }, 400);
+  if (!newSlug || newSlug.length < 3 || newSlug.length > 30) return json({ error: "Choose a channel URL between 3 and 30 characters using letters, numbers, and hyphens." }, 400);
+
+  try {
+    const result = await db.prepare(
+      "UPDATE channels SET name = ?, slug = ?, description = ? WHERE slug = ? AND owner_discord_id = ?"
+    ).bind(name, newSlug, description, slug, user.id).run();
+    if (Number(result.meta?.changes || 0) !== 1) return json({ error: "Channel not found, or no changes were saved." }, 404);
+  } catch (error) {
+    console.error("Channel update rejected:", error);
+    return json({ error: "That channel URL is already in use. Please choose another." }, 409);
+  }
+  const updated = await db.prepare(
+    "SELECT id, name, slug, description, youtube_channel_id, youtube_channel_title, youtube_thumbnail_url, created_at FROM channels WHERE slug = ? AND owner_discord_id = ? LIMIT 1"
+  ).bind(newSlug, user.id).first();
+  return json({ success: true, channel: updated });
 }
 
 async function deletePending(db, id) {
