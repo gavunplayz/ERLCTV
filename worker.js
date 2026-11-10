@@ -221,7 +221,7 @@ async function finishYouTubeConnection(request, env) {
   });
   const tokenData = await tokenResponse.json();
   if (!tokenResponse.ok || !tokenData.access_token) {
-    console.error("Google token exchange failed:", tokenData.error || tokenResponse.status);
+    console.error("Google token exchange failed:", JSON.stringify({ status: tokenResponse.status, error: tokenData.error || "unknown_error", description: tokenData.error_description || "No description returned" }));
     await deletePending(db, pending.id);
     return channelRedirect("google_token_error");
   }
