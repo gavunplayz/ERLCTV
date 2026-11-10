@@ -188,7 +188,9 @@ async function beginChannelConnection(request, env) {
   googleUrl.searchParams.set("prompt", "consent");
   googleUrl.searchParams.set("include_granted_scopes", "true");
   googleUrl.searchParams.set("state", state);
-  return json({ authorizeUrl: googleUrl.toString() });
+  const response = json({ authorizeUrl: googleUrl.toString() });
+  response.headers.set("Set-Cookie", cookie(YOUTUBE_STATE_COOKIE, state, STATE_SECONDS));
+  return response;
 }
 
 async function finishYouTubeConnection(request, env) {
