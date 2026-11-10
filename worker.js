@@ -51,7 +51,7 @@ function corsPreflight(request) {
     status: 204,
     headers: {
       "Access-Control-Allow-Origin": SITE_ORIGIN,
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
       "Access-Control-Allow-Headers": "Authorization, Content-Type",
       "Access-Control-Max-Age": "86400",
       "Vary": "Origin"
