@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ER:LC TV Key Generator</title>
+<style>
+body{margin:0;min-height:100vh;background:#080b10;color:#f4f7fb;font:16px/1.5 system-ui,sans-serif;display:grid;place-items:center;padding:20px;box-sizing:border-box}
+main{max-width:560px;width:100%;background:#101722;border:1px solid #26364a;border-radius:16px;padding:24px;box-sizing:border-box}
+h1{font-size:24px;margin:0 0 8px}p{color:#aab8ca;font-size:14px}
+button{background:#2388ff;border:0;border-radius:9px;color:white;font-weight:700;padding:12px 16px;font-size:15px;cursor:pointer}
+output{display:block;overflow-wrap:anywhere;background:#080e17;border:1px solid #2a3b52;border-radius:9px;padding:13px;margin:14px 0;font:13px/1.6 ui-monospace,monospace;min-height:44px}
+.note{font-size:12px;color:#91a4bb}
+</style>
+</head>
+<body>
+<main>
+<h1>ER:LC TV encryption key generator</h1>
+<p>Generate a secure 32-byte key for Cloudflare. This page creates the key inside your browser. It does not send the key anywhere.</p>
+<button id="generate" type="button">Generate secure key</button>
+<output id="key">Tap the button to generate your key.</output>
+<button id="copy" type="button" disabled>Copy key</button>
+<p class="note">Keep this key private. Add it to Cloudflare as the secret named YOUTUBE_TOKEN_ENCRYPTION_KEY. Do not put it in GitHub or send it in chat.</p>
+</main>
+<script>
+let currentKey = '';
+document.getElementById('generate').addEventListener('click', () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  currentKey = btoa(binary);
+  document.getElementById('key').textContent = currentKey;
+  document.getElementById('copy').disabled = false;
+});
+document.getElementById('copy').addEventListener('click', async () => {
+  if (!currentKey) return;
+  try {
+    await navigator.clipboard.writeText(currentKey);
+    document.getElementById('copy').textContent = 'Copied!';
+  } catch {
+    alert('Select and copy the key shown above.');
+  }
+});
+</script>
+</body>
+</html>
