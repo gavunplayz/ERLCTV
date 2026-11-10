@@ -158,6 +158,29 @@
   <script>
     const AUTH_API = 'https://erlctv.gavunblake.workers.dev';
     const SESSION_KEY = 'erlctv_discord_session';
+    const CHANNELS_API = AUTH_API + '/channels';
+    const channelManager = document.getElementById('channelsManager');
+    const channelForm = document.getElementById('channelForm');
+    const channelMessage = document.getElementById('channelMessage');
+    const channelList = document.getElementById('channelList');
+    const createChannelButton = document.getElementById('createChannelButton');
+    const channelStatusMessages = {
+      created: 'Your channel was created and your YouTube account was connected!',
+      google_cancelled: 'You cancelled YouTube connection. You can try again.',
+      google_state_error: 'YouTube connection could not be verified. Please try again.',
+      setup_expired: 'The channel setup expired. Please start again.',
+      google_token_error: 'Google could not complete the connection. Check your OAuth setup and try again.',
+      youtube_channel_missing: 'We could not find a YouTube channel on that Google account.',
+      refresh_token_missing: 'Google did not provide a refresh token. Try again and approve the requested access.',
+      channel_limit_or_taken: 'You have reached your 3-channel limit, or that channel URL / YouTube account is already connected.'
+    };
+    const returnedChannelStatus = new URLSearchParams(location.search).get('channel_status');
+    if (returnedChannelStatus) {
+      channelMessage.textContent = channelStatusMessages[returnedChannelStatus] || 'Channel setup finished with status: ' + returnedChannelStatus;
+      if (returnedChannelStatus !== 'created') channelMessage.classList.add('error');
+      history.replaceState(null, '', location.pathname + location.hash);
+    }
+
     const searchInput = document.getElementById('searchInput');
 
     searchInput.addEventListener('keydown', event => {
@@ -231,7 +254,84 @@
       copy.append(avatar, details);
 
       accountPanel.replaceChildren(copy, makeSignOutButton());
+      channelManager.hidden = false;
+      loadMyChannels();
     }
+
+    async function loadMyChannels() {
+      const token = getSessionToken();
+      if (!token) return;
+      try {
+        const response = await fetch(CHANNELS_API, { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not load your channels.');
+        channelList.replaceChildren();
+        const channels = result.channels || [];
+        channelMessage.textContent = 'You have created ' + channels.length + ' of ' + (result.limit || 3) + ' channels.';
+        createChannelButton.disabled = channels.length >= 3;
+        createChannelButton.textContent = channels.length >= 3 ? 'Channel limit reached (3/3)' : 'Create channel & connect YouTube';
+        if (!channels.length) {
+          const empty = document.createElement('div');
+          empty.className = 'empty-strip';
+          empty.textContent = 'You have not created a channel yet.';
+          channelList.appendChild(empty);
+          return;
+        }
+        for (const channel of channels) {
+          const item = document.createElement('div');
+          item.className = 'channel-item';
+          const avatar = document.createElement('img');
+          avatar.alt = '';
+          if (channel.youtube_thumbnail_url) avatar.src = channel.youtube_thumbnail_url;
+          const details = document.createElement('div');
+          details.style.minWidth = '0';
+          const name = document.createElement('strong');
+          name.textContent = channel.name;
+          const linked = document.createElement('small');
+          linked.textContent = 'YouTube: ' + channel.youtube_channel_title + ' · /' + channel.slug;
+          details.append(name, linked);
+          item.append(avatar, details);
+          channelList.appendChild(item);
+        }
+      } catch (error) {
+        channelMessage.textContent = error.message || 'Could not load your channels.';
+        channelMessage.classList.add('error');
+      }
+    }
+
+    channelForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const token = getSessionToken();
+      if (!token) {
+        channelMessage.textContent = 'Please sign in with Discord first.';
+        channelMessage.classList.add('error');
+        return;
+      }
+      createChannelButton.disabled = true;
+      createChannelButton.textContent = 'Preparing YouTube connection...';
+      channelMessage.classList.remove('error');
+      channelMessage.textContent = 'Opening Google to connect your YouTube channel...';
+      try {
+        const response = await fetch(CHANNELS_API + '/connect', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: document.getElementById('channelName').value,
+            slug: document.getElementById('channelSlug').value,
+            description: document.getElementById('channelDescription').value
+          })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not start channel creation.');
+        if (!result.authorizeUrl) throw new Error('Google authorization link was not returned.');
+        location.href = result.authorizeUrl;
+      } catch (error) {
+        channelMessage.textContent = error.message || 'Could not start channel creation.';
+        channelMessage.classList.add('error');
+        createChannelButton.disabled = false;
+        createChannelButton.textContent = 'Create channel & connect YouTube';
+      }
+    });
 
     async function loadAccount() {
       const token = getSessionToken();
