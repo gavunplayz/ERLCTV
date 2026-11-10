@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#080b10"><title>Manage channel — ER:LC TV</title>
+<style>
+:root{color-scheme:dark;--bg:#080b10;--panel:#101824;--line:#1e2b3c;--blue:#2388ff;--muted:#91a0b4;--text:#f4f7fb}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 Inter,system-ui,sans-serif}a{color:inherit;text-decoration:none}.top{height:68px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 max(20px,calc((100% - 900px)/2));font-size:20px;font-weight:850}.mark{display:inline-grid;place-items:center;background:#2388ff;border-radius:10px;width:35px;height:35px;margin-right:10px}.wrap{max-width:900px;margin:35px auto;padding:0 20px}h1{font-size:30px;margin:0 0 5px}.muted{color:var(--muted)}.panel{margin-top:22px;background:var(--panel);border:1px solid var(--line);border-radius:17px;padding:24px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:17px}label{display:block;font-weight:700}input,textarea{display:block;width:100%;margin-top:7px;background:#080e17;color:var(--text);border:1px solid #29384b;border-radius:10px;padding:12px;font:inherit}textarea{min-height:110px;resize:vertical}.full{grid-column:1/-1}.btn{display:inline-flex;border:0;border-radius:10px;padding:11px 16px;background:#1b2737;color:white;font:inherit;font-weight:750;cursor:pointer}.primary{background:var(--blue)}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.status{margin-top:15px;color:#8fc5ff}.error{color:#ff9292}.yt{padding:14px;background:#0b121d;border:1px solid var(--line);border-radius:12px;margin-top:16px}.yt a{color:#79b8ff;overflow-wrap:anywhere}.foot{margin:30px 0;color:var(--muted);font-size:12px}@media(max-width:600px){.fields{grid-template-columns:1fr}.full{grid-column:auto}.panel{padding:18px}}
+</style></head>
+<body><header class="top"><a href="./"><span class="mark">▶</span>ER:LC TV</a></header>
+<main class="wrap"><h1>Channel owner studio</h1><div class="muted">Manage your ER:LC TV channel details.</div>
+<div id="status" class="status">Checking your account…</div>
+<section id="editor" class="panel" hidden><form id="form"><div class="fields">
+<label>Channel name<input id="name" maxlength="40" minlength="2" required></label>
+<label>Channel URL name<input id="slug" maxlength="30" required></label>
+<label class="full">Description<textarea id="description" maxlength="160"></textarea></label>
+</div><div class="actions"><button class="btn primary" id="save" type="submit">Save changes</button><a class="btn" id="publicLink" target="_blank" rel="noopener">View public page ↗</a><a class="btn" href="./">Back to ER:LC TV</a></div></form>
+<div class="yt"><strong>Connected YouTube channel</strong><div id="youtubeTitle" class="muted"></div><a id="youtubeLink" target="_blank" rel="noopener">Open YouTube ↗</a></div>
+</section><div class="foot">Only the Discord account that owns this channel can access this page.</div></main>
+<script>
+const API='https://erlctv.gavunblake.workers.dev',SESSION_KEY='erlctv_discord_session';
+const params=new URLSearchParams(location.search);let currentSlug=params.get('slug');const status=document.getElementById('status'),editor=document.getElementById('editor'),form=document.getElementById('form'),save=document.getElementById('save');
+function showError(message){status.textContent=message;status.className='status error'}
+function token(){return sessionStorage.getItem(SESSION_KEY)}
+async function api(path,options={}){const t=token();if(!t)throw new Error('Please sign in with Discord on the ER:LC TV homepage first.');const response=await fetch(API+path,{...options,headers:{Authorization:'Bearer '+t,'Content-Type':'application/json',...(options.headers||{})},cache:'no-store'});const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed.');return data}
+function render(c){currentSlug=c.slug;document.getElementById('name').value=c.name;document.getElementById('slug').value=c.slug;document.getElementById('description').value=c.description||'';document.getElementById('youtubeTitle').textContent=c.youtube_channel_title;const yt='https://www.youtube.com/channel/'+encodeURIComponent(c.youtube_channel_id);document.getElementById('youtubeLink').href=yt;document.getElementById('publicLink').href='./channel.html?slug='+encodeURIComponent(c.slug);history.replaceState(null,'',location.pathname+'?slug='+encodeURIComponent(c.slug));editor.hidden=false;status.textContent='You are managing '+c.name+'.';status.className='status'}
+(async()=>{if(!currentSlug){showError('No channel was specified. Open this page from your channel manager.');return}try{const data=await api('/channels/owner?slug='+encodeURIComponent(currentSlug));render(data.channel)}catch(e){showError(e.message)}})();
+form.addEventListener('submit',async event=>{event.preventDefault();save.disabled=true;save.textContent='Saving…';status.textContent='Saving channel details…';status.className='status';try{const data=await api('/channels/owner?slug='+encodeURIComponent(currentSlug),{method:'PATCH',body:JSON.stringify({name:document.getElementById('name').value,slug:document.getElementById('slug').value,description:document.getElementById('description').value})});render(data.channel);status.textContent='Your channel details have been saved.'}catch(e){showError(e.message)}finally{save.disabled=false;save.textContent='Save changes'}});
+</script></body></html>
