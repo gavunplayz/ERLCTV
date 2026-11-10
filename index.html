@@ -290,7 +290,18 @@
           const linked = document.createElement('small');
           linked.textContent = 'YouTube: ' + channel.youtube_channel_title + ' · /' + channel.slug;
           details.append(name, linked);
-          item.append(avatar, details);
+          const actions = document.createElement("div");
+          actions.className = "channel-actions";
+          const publicLink = document.createElement("a");
+          publicLink.className = "btn";
+          publicLink.href = "./channel.html?slug=" + encodeURIComponent(channel.slug);
+          publicLink.textContent = "View public page";
+          const ownerLink = document.createElement("a");
+          ownerLink.className = "btn primary";
+          ownerLink.href = "./manage-channel.html?slug=" + encodeURIComponent(channel.slug);
+          ownerLink.textContent = "Manage channel";
+          actions.append(publicLink, ownerLink);
+          item.append(avatar, details, actions);
           channelList.appendChild(item);
         }
       } catch (error) {
