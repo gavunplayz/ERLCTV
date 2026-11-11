@@ -10,7 +10,7 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    if (path.startsWith("/auth/") || path.startsWith("/channels") || path.startsWith("/youtube/") || path.startsWith("/videos/") || path.startsWith("/shorts/")) {
+    if (path.startsWith("/auth/") || path.startsWith("/channels") || path.startsWith("/youtube/") || path.startsWith("/videos/") || path.startsWith("/shorts/") || path.startsWith("/live/")) {
       if (request.method === "OPTIONS") return corsPreflight(request);
       try {
         let response;
@@ -23,6 +23,9 @@ export default {
         else if (path === "/channels/public" && request.method === "GET") response = await getPublicChannel(url, env);
         else if (path === "/channels/owner" && (request.method === "GET" || request.method === "PATCH")) response = await manageChannel(request, url, env);
         else if (path === "/channels/videos" && ["GET", "POST", "PATCH", "DELETE"].includes(request.method)) response = await manageVideos(request, url, env);
+        else if (path === "/channels/live" && ["GET", "POST", "PATCH", "DELETE"].includes(request.method)) response = await manageLiveStreams(request, url, env);
+        else if (path === "/channels/public/live" && request.method === "GET") response = await getPublicLiveStreams(url, env);
+        else if (path === "/live/public" && request.method === "GET") response = await getPublicLiveStream(url, env);
         else if (path === "/channels/shorts" && ["GET", "POST", "PATCH", "DELETE"].includes(request.method)) response = await manageShorts(request, url, env);
         else if (path === "/channels/public/shorts" && request.method === "GET") response = await getPublicShorts(url, env);
         else if (path === "/shorts/public" && request.method === "GET") response = await getPublicShort(url, env);
@@ -392,6 +395,76 @@ async function manageVideos(request, url, env) {
   return json({ success: true, video: updated });
 }
 
+async function manageLiveStreams(request, url, env) {
+  const user = await authenticatedUser(request, env);
+  if (!user) return json({ error: "Please sign in with Discord first." }, 401);
+  const slug = makeSlug(url.searchParams.get("slug") || "");
+  if (!slug) return json({ error: "A channel URL is required." }, 400);
+  const db = requireDatabase(env);
+  const channel = await db.prepare("SELECT id, youtube_channel_id, youtube_refresh_token_enc FROM channels WHERE slug = ? AND owner_discord_id = ? LIMIT 1").bind(slug, user.id).first();
+  if (!channel) return json({ error: "Channel not found, or you do not own it." }, 404);
+
+  if (request.method === "GET") {
+    const rows = await db.prepare("SELECT id, youtube_video_id, title, thumbnail_url, description, youtube_published_at, site_publish_at, created_at FROM live_streams WHERE channel_id = ? ORDER BY created_at DESC").bind(channel.id).all();
+    return json({ liveStreams: rows.results || [] });
+  }
+
+  if (request.method === "DELETE") {
+    const id = String(url.searchParams.get("id") || "");
+    if (!id) return json({ error: "A live stream ID is required." }, 400);
+    const result = await db.prepare("DELETE FROM live_streams WHERE id = ? AND channel_id = ?").bind(id, channel.id).run();
+    if (Number(result.meta?.changes || 0) !== 1) return json({ error: "Live stream not found." }, 404);
+    return json({ success: true });
+  }
+
+  let body;
+  try { body = await request.json(); } catch { return json({ error: "Please enter valid live stream details." }, 400); }
+  const description = String(body.description || "").trim();
+  if (description.length > 5000) return json({ error: "Live stream description must be 5,000 characters or fewer." }, 400);
+  const youtubePublishedAt = parseDateInput(body.youtubePublishedAt);
+  const sitePublishAt = parseDateInput(body.sitePublishAt);
+  if (!youtubePublishedAt) return json({ error: "Please enter the date the live stream was published on YouTube." }, 400);
+  if (!sitePublishAt) return json({ error: "Please choose when the live stream should appear on ER:LC TV." }, 400);
+
+  if (request.method === "POST") {
+    const videoId = extractYouTubeLive streamId(body.youtubeUrl || body.videoId || "");
+    if (!videoId) return json({ error: "Enter a valid YouTube YouTube live stream URL or live stream ID." }, 400);
+    const existing = await db.prepare("SELECT id FROM live_streams WHERE youtube_video_id = ? LIMIT 1").bind(videoId).first();
+    if (existing) return json({ error: "That YouTube live stream is already listed on ER:LC TV." }, 409);
+
+    const accessToken = await getYouTubeAccessToken(channel.youtube_refresh_token_enc, env);
+    const detailsResponse = await fetch("https://www.googleapis.com/youtube/v3/live streams?part=snippet&id=" + encodeURIComponent(videoId), { headers: { Authorization: "Bearer " + accessToken } });
+    const detailsData = await detailsResponse.json();
+    const item = detailsData.items && detailsData.items[0];
+    if (!detailsResponse.ok) {
+      console.error("YouTube live stream verification failed:", detailsData.error?.message || detailsResponse.status);
+      return json({ error: "YouTube could not verify that live stream. Please try again." }, 502);
+    }
+    if (!item || item.snippet?.channelId !== channel.youtube_channel_id) return json({ error: "That live stream does not belong to the YouTube channel connected to this ER:LC TV channel, or it is unavailable." }, 403);
+
+    const id = crypto.randomUUID();
+    try {
+      await db.prepare("INSERT INTO live_streams (id, channel_id, youtube_video_id, title, thumbnail_url, description, youtube_published_at, site_publish_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(id, channel.id, videoId, String(item.snippet.title || "YouTube live stream").slice(0, 200), item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || null, description, youtubePublishedAt, sitePublishAt).run();
+    } catch (error) {
+      console.error("Live stream listing insert failed:", error);
+      return json({ error: "This live stream may already be listed. Refresh your live stream library and try again." }, 409);
+    }
+    const saved = await db.prepare("SELECT id, youtube_video_id, title, thumbnail_url, description, youtube_published_at, site_publish_at, created_at FROM live_streams WHERE id = ?").bind(id).first();
+    return json({ success: true, live stream: saved }, 201);
+  }
+
+  const id = String(body.id || "");
+  if (!id) return json({ error: "A live stream listing ID is required." }, 400);
+  const title = String(body.title || "").trim();
+  if (title.length < 1 || title.length > 200) return json({ error: "Live stream title must be between 1 and 200 characters." }, 400);
+  const result = await db.prepare("UPDATE live_streams SET title = ?, description = ?, youtube_published_at = ?, site_publish_at = ? WHERE id = ? AND channel_id = ?")
+    .bind(title, description, youtubePublishedAt, sitePublishAt, id, channel.id).run();
+  if (Number(result.meta?.changes || 0) !== 1) return json({ error: "Live stream listing not found." }, 404);
+  const updated = await db.prepare("SELECT id, youtube_video_id, title, thumbnail_url, description, youtube_published_at, site_publish_at, created_at FROM live_streams WHERE id = ?").bind(id).first();
+  return json({ success: true, liveStream: updated });
+}
+
 async function manageShorts(request, url, env) {
   const user = await authenticatedUser(request, env);
   if (!user) return json({ error: "Please sign in with Discord first." }, 401);
@@ -502,6 +575,27 @@ async function getPublicShort(url, env) {
     .bind(id, Math.floor(Date.now() / 1000)).first();
   if (!short) return json({ error: "Short not found." }, 404);
   return json({ short });
+}
+
+async function getPublicLiveStreams(url, env) {
+  const slug = makeSlug(url.searchParams.get("slug") || "");
+  if (!slug) return json({ error: "A channel URL is required." }, 400);
+  const db = requireDatabase(env);
+  const channel = await db.prepare("SELECT id FROM channels WHERE slug = ? LIMIT 1").bind(slug).first();
+  if (!channel) return json({ error: "Channel not found." }, 404);
+  const rows = await db.prepare("SELECT id, youtube_video_id, title, thumbnail_url, description, youtube_published_at, site_publish_at FROM live_streams WHERE channel_id = ? AND site_publish_at <= ? ORDER BY site_publish_at DESC")
+    .bind(channel.id, Math.floor(Date.now() / 1000)).all();
+  return json({ liveStreams: rows.results || [] });
+}
+
+async function getPublicLiveStream(url, env) {
+  const id = String(url.searchParams.get("id") || "");
+  if (!id) return json({ error: "A live stream ID is required." }, 400);
+  const db = requireDatabase(env);
+  const liveStream = await db.prepare("SELECT v.id, v.youtube_video_id, v.title, v.thumbnail_url, v.description, v.youtube_published_at, c.name AS channel_name, c.slug AS channel_slug, c.youtube_channel_title, c.youtube_channel_id, c.youtube_thumbnail_url FROM live_streams v JOIN channels c ON c.id = v.channel_id WHERE v.id = ? AND v.site_publish_at <= ? LIMIT 1")
+    .bind(id, Math.floor(Date.now() / 1000)).first();
+  if (!liveStream) return json({ error: "Live stream not found." }, 404);
+  return json({ liveStream });
 }
 
 function parseDateInput(value) {
