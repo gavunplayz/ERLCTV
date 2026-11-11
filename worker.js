@@ -10,7 +10,7 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    if (path.startsWith("/auth/") || path.startsWith("/channels") || path.startsWith("/youtube/") || path.startsWith("/videos/")) {
+    if (path.startsWith("/auth/") || path.startsWith("/channels") || path.startsWith("/youtube/") || path.startsWith("/videos/") || path.startsWith("/shorts/")) {
       if (request.method === "OPTIONS") return corsPreflight(request);
       try {
         let response;
