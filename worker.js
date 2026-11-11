@@ -517,7 +517,7 @@ function extractYouTubeShortId(value) {
   try {
     const url = new URL(input);
     if (!["youtube.com", "www.youtube.com", "m.youtube.com"].includes(url.hostname)) return null;
-    const match = url.pathname.match(/^\\/shorts\\/([a-zA-Z0-9_-]{11})\\/?$/);
+    const match = url.pathname.match(/^\/shorts\/([a-zA-Z0-9_-]{11})\/?$/);
     return match ? match[1] : null;
   } catch { return null; }
 }
