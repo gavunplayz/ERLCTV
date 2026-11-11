@@ -451,7 +451,7 @@ async function manageLiveStreams(request, url, env) {
       return json({ error: "This live stream may already be listed. Refresh your live stream library and try again." }, 409);
     }
     const saved = await db.prepare("SELECT id, youtube_video_id, title, thumbnail_url, description, youtube_published_at, site_publish_at, created_at FROM live_streams WHERE id = ?").bind(id).first();
-    return json({ success: true, live stream: saved }, 201);
+    return json({ success: true, liveStream: saved }, 201);
   }
 
   const id = String(body.id || "");
