@@ -66,7 +66,7 @@ function addCorsHeaders(response, request) {
   const headers = new Headers(response.headers);
   if (request.headers.get("Origin") === SITE_ORIGIN) {
     headers.set("Access-Control-Allow-Origin", SITE_ORIGIN);
-    headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    headers.set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
     headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
     headers.set("Vary", "Origin");
   }
