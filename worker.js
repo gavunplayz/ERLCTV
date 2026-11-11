@@ -433,7 +433,7 @@ async function manageLiveStreams(request, url, env) {
     if (existing) return json({ error: "That YouTube live stream is already listed on ER:LC TV." }, 409);
 
     const accessToken = await getYouTubeAccessToken(channel.youtube_refresh_token_enc, env);
-    const detailsResponse = await fetch("https://www.googleapis.com/youtube/v3/live streams?part=snippet&id=" + encodeURIComponent(videoId), { headers: { Authorization: "Bearer " + accessToken } });
+    const detailsResponse = await fetch("https://www.googleapis.com/youtube/v3/videos?part=snippet&id=" + encodeURIComponent(videoId), { headers: { Authorization: "Bearer " + accessToken } });
     const detailsData = await detailsResponse.json();
     const item = detailsData.items && detailsData.items[0];
     if (!detailsResponse.ok) {
