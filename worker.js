@@ -23,6 +23,9 @@ export default {
         else if (path === "/channels/public" && request.method === "GET") response = await getPublicChannel(url, env);
         else if (path === "/channels/owner" && (request.method === "GET" || request.method === "PATCH")) response = await manageChannel(request, url, env);
         else if (path === "/channels/videos" && ["GET", "POST", "PATCH", "DELETE"].includes(request.method)) response = await manageVideos(request, url, env);
+        else if (path === "/channels/shorts" && ["GET", "POST", "PATCH", "DELETE"].includes(request.method)) response = await manageShorts(request, url, env);
+        else if (path === "/channels/public/shorts" && request.method === "GET") response = await getPublicShorts(url, env);
+        else if (path === "/shorts/public" && request.method === "GET") response = await getPublicShort(url, env);
         else if (path === "/channels/public/videos" && request.method === "GET") response = await getPublicVideos(url, env);
         else if (path === "/videos/public" && request.method === "GET") response = await getPublicVideo(url, env);
         else if (path === "/youtube/callback" && request.method === "GET") response = await finishYouTubeConnection(request, env);
@@ -389,6 +392,76 @@ async function manageVideos(request, url, env) {
   return json({ success: true, video: updated });
 }
 
+async function manageShorts(request, url, env) {
+  const user = await authenticatedUser(request, env);
+  if (!user) return json({ error: "Please sign in with Discord first." }, 401);
+  const slug = makeSlug(url.searchParams.get("slug") || "");
+  if (!slug) return json({ error: "A channel URL is required." }, 400);
+  const db = requireDatabase(env);
+  const channel = await db.prepare("SELECT id, youtube_channel_id, youtube_refresh_token_enc FROM channels WHERE slug = ? AND owner_discord_id = ? LIMIT 1").bind(slug, user.id).first();
+  if (!channel) return json({ error: "Channel not found, or you do not own it." }, 404);
+
+  if (request.method === "GET") {
+    const rows = await db.prepare("SELECT id, youtube_short_id, title, thumbnail_url, description, youtube_published_at, site_publish_at, created_at FROM shorts WHERE channel_id = ? ORDER BY created_at DESC").bind(channel.id).all();
+    return json({ shorts: rows.results || [] });
+  }
+
+  if (request.method === "DELETE") {
+    const id = String(url.searchParams.get("id") || "");
+    if (!id) return json({ error: "A short ID is required." }, 400);
+    const result = await db.prepare("DELETE FROM shorts WHERE id = ? AND channel_id = ?").bind(id, channel.id).run();
+    if (Number(result.meta?.changes || 0) !== 1) return json({ error: "Short not found." }, 404);
+    return json({ success: true });
+  }
+
+  let body;
+  try { body = await request.json(); } catch { return json({ error: "Please enter valid short details." }, 400); }
+  const description = String(body.description || "").trim();
+  if (description.length > 5000) return json({ error: "Short description must be 5,000 characters or fewer." }, 400);
+  const youtubePublishedAt = parseDateInput(body.youtubePublishedAt);
+  const sitePublishAt = parseDateInput(body.sitePublishAt);
+  if (!youtubePublishedAt) return json({ error: "Please enter the date the short was published on YouTube." }, 400);
+  if (!sitePublishAt) return json({ error: "Please choose when the short should appear on ER:LC TV." }, 400);
+
+  if (request.method === "POST") {
+    const shortId = extractYouTubeShortId(body.youtubeUrl || body.shortUrl || "");
+    if (!shortId) return json({ error: "Enter a valid YouTube Short URL or short ID." }, 400);
+    const existing = await db.prepare("SELECT id FROM shorts WHERE youtube_short_id = ? LIMIT 1").bind(shortId).first();
+    if (existing) return json({ error: "That YouTube Short is already listed on ER:LC TV." }, 409);
+
+    const accessToken = await getYouTubeAccessToken(channel.youtube_refresh_token_enc, env);
+    const detailsResponse = await fetch("https://www.googleapis.com/youtube/v3/shorts?part=snippet&id=" + encodeURIComponent(shortId), { headers: { Authorization: "Bearer " + accessToken } });
+    const detailsData = await detailsResponse.json();
+    const item = detailsData.items && detailsData.items[0];
+    if (!detailsResponse.ok) {
+      console.error("YouTube Short verification failed:", detailsData.error?.message || detailsResponse.status);
+      return json({ error: "YouTube could not verify that short. Please try again." }, 502);
+    }
+    if (!item || item.snippet?.channelId !== channel.youtube_channel_id) return json({ error: "That short does not belong to the YouTube channel connected to this ER:LC TV channel, or it is unavailable." }, 403);
+
+    const id = crypto.randomUUID();
+    try {
+      await db.prepare("INSERT INTO shorts (id, channel_id, youtube_short_id, title, thumbnail_url, description, youtube_published_at, site_publish_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(id, channel.id, shortId, String(item.snippet.title || "YouTube Short").slice(0, 200), item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || null, description, youtubePublishedAt, sitePublishAt).run();
+    } catch (error) {
+      console.error("Short listing insert failed:", error);
+      return json({ error: "This short may already be listed. Refresh your short library and try again." }, 409);
+    }
+    const saved = await db.prepare("SELECT id, youtube_short_id, title, thumbnail_url, description, youtube_published_at, site_publish_at, created_at FROM shorts WHERE id = ?").bind(id).first();
+    return json({ success: true, short: saved }, 201);
+  }
+
+  const id = String(body.id || "");
+  if (!id) return json({ error: "A short listing ID is required." }, 400);
+  const title = String(body.title || "").trim();
+  if (title.length < 1 || title.length > 200) return json({ error: "Short title must be between 1 and 200 characters." }, 400);
+  const result = await db.prepare("UPDATE shorts SET title = ?, description = ?, youtube_published_at = ?, site_publish_at = ? WHERE id = ? AND channel_id = ?")
+    .bind(title, description, youtubePublishedAt, sitePublishAt, id, channel.id).run();
+  if (Number(result.meta?.changes || 0) !== 1) return json({ error: "Short listing not found." }, 404);
+  const updated = await db.prepare("SELECT id, youtube_short_id, title, thumbnail_url, description, youtube_published_at, site_publish_at, created_at FROM shorts WHERE id = ?").bind(id).first();
+  return json({ success: true, short: updated });
+}
+
 async function getPublicVideos(url, env) {
   const slug = makeSlug(url.searchParams.get("slug") || "");
   if (!slug) return json({ error: "A channel URL is required." }, 400);
@@ -410,12 +483,43 @@ async function getPublicVideo(url, env) {
   return json({ video });
 }
 
+async function getPublicShorts(url, env) {
+  const slug = makeSlug(url.searchParams.get("slug") || "");
+  if (!slug) return json({ error: "A channel URL is required." }, 400);
+  const db = requireDatabase(env);
+  const channel = await db.prepare("SELECT id FROM channels WHERE slug = ? LIMIT 1").bind(slug).first();
+  if (!channel) return json({ error: "Channel not found." }, 404);
+  const rows = await db.prepare("SELECT id, youtube_short_id, title, thumbnail_url, description, youtube_published_at, site_publish_at FROM shorts WHERE channel_id = ? AND site_publish_at <= ? ORDER BY site_publish_at DESC")
+    .bind(channel.id, Math.floor(Date.now() / 1000)).all();
+  return json({ shorts: rows.results || [] });
+}
+
+async function getPublicShort(url, env) {
+  const id = String(url.searchParams.get("id") || "");
+  if (!id) return json({ error: "A short ID is required." }, 400);
+  const db = requireDatabase(env);
+  const short = await db.prepare("SELECT v.id, v.youtube_short_id, v.title, v.thumbnail_url, v.description, v.youtube_published_at, c.name AS channel_name, c.slug AS channel_slug, c.youtube_channel_title, c.youtube_channel_id, c.youtube_thumbnail_url FROM shorts v JOIN channels c ON c.id = v.channel_id WHERE v.id = ? AND v.site_publish_at <= ? LIMIT 1")
+    .bind(id, Math.floor(Date.now() / 1000)).first();
+  if (!short) return json({ error: "Short not found." }, 404);
+  return json({ short });
+}
+
 function parseDateInput(value) {
   const text = String(value || "").trim();
   if (!text) return null;
   const milliseconds = Date.parse(text);
   if (!Number.isFinite(milliseconds)) return null;
   return Math.floor(milliseconds / 1000);
+}
+
+function extractYouTubeShortId(value) {
+  const input = String(value || "").trim();
+  try {
+    const url = new URL(input);
+    if (!["youtube.com", "www.youtube.com", "m.youtube.com"].includes(url.hostname)) return null;
+    const match = url.pathname.match(/^\\/shorts\\/([a-zA-Z0-9_-]{11})\\/?$/);
+    return match ? match[1] : null;
+  } catch { return null; }
 }
 
 function extractYouTubeVideoId(value) {
