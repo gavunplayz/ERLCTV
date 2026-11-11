@@ -22,6 +22,9 @@ export default {
         else if (path === "/channels/connect" && request.method === "POST") response = await beginChannelConnection(request, env);
         else if (path === "/channels/public" && request.method === "GET") response = await getPublicChannel(url, env);
         else if (path === "/channels/owner" && (request.method === "GET" || request.method === "PATCH")) response = await manageChannel(request, url, env);
+        else if (path === "/channels/videos" && ["GET", "POST", "PATCH", "DELETE"].includes(request.method)) response = await manageVideos(request, url, env);
+        else if (path === "/channels/public/videos" && request.method === "GET") response = await getPublicVideos(url, env);
+        else if (path === "/videos/public" && request.method === "GET") response = await getPublicVideo(url, env);
         else if (path === "/youtube/callback" && request.method === "GET") response = await finishYouTubeConnection(request, env);
         else response = json({ error: "Not found" }, 404);
         return addCorsHeaders(response, request);
@@ -51,7 +54,7 @@ function corsPreflight(request) {
     status: 204,
     headers: {
       "Access-Control-Allow-Origin": SITE_ORIGIN,
-      "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Authorization, Content-Type",
       "Access-Control-Max-Age": "86400",
       "Vary": "Origin"
@@ -313,6 +316,146 @@ async function manageChannel(request, url, env) {
     "SELECT id, name, slug, description, youtube_channel_id, youtube_channel_title, youtube_thumbnail_url, created_at FROM channels WHERE slug = ? AND owner_discord_id = ? LIMIT 1"
   ).bind(newSlug, user.id).first();
   return json({ success: true, channel: updated });
+}
+
+
+async function manageVideos(request, url, env) {
+  const user = await authenticatedUser(request, env);
+  if (!user) return json({ error: "Please sign in with Discord first." }, 401);
+  const slug = makeSlug(url.searchParams.get("slug") || "");
+  if (!slug) return json({ error: "A channel URL is required." }, 400);
+  const db = requireDatabase(env);
+  const channel = await db.prepare("SELECT id, youtube_channel_id, youtube_refresh_token_enc FROM channels WHERE slug = ? AND owner_discord_id = ? LIMIT 1").bind(slug, user.id).first();
+  if (!channel) return json({ error: "Channel not found, or you do not own it." }, 404);
+
+  if (request.method === "GET") {
+    const rows = await db.prepare("SELECT id, youtube_video_id, title, thumbnail_url, description, youtube_published_at, site_publish_at, created_at FROM videos WHERE channel_id = ? ORDER BY created_at DESC").bind(channel.id).all();
+    return json({ videos: rows.results || [] });
+  }
+
+  if (request.method === "DELETE") {
+    const id = String(url.searchParams.get("id") || "");
+    if (!id) return json({ error: "A video ID is required." }, 400);
+    const result = await db.prepare("DELETE FROM videos WHERE id = ? AND channel_id = ?").bind(id, channel.id).run();
+    if (Number(result.meta?.changes || 0) !== 1) return json({ error: "Video not found." }, 404);
+    return json({ success: true });
+  }
+
+  let body;
+  try { body = await request.json(); } catch { return json({ error: "Please enter valid video details." }, 400); }
+  const description = String(body.description || "").trim();
+  if (description.length > 5000) return json({ error: "Video description must be 5,000 characters or fewer." }, 400);
+  const youtubePublishedAt = parseDateInput(body.youtubePublishedAt);
+  const sitePublishAt = parseDateInput(body.sitePublishAt);
+  if (!youtubePublishedAt) return json({ error: "Please enter the date the video was published on YouTube." }, 400);
+  if (!sitePublishAt) return json({ error: "Please choose when the video should appear on ER:LC TV." }, 400);
+
+  if (request.method === "POST") {
+    const videoId = extractYouTubeVideoId(body.youtubeUrl || body.videoId || "");
+    if (!videoId) return json({ error: "Enter a valid YouTube video URL or video ID." }, 400);
+    const existing = await db.prepare("SELECT id FROM videos WHERE youtube_video_id = ? LIMIT 1").bind(videoId).first();
+    if (existing) return json({ error: "That YouTube video is already listed on ER:LC TV." }, 409);
+
+    const accessToken = await getYouTubeAccessToken(channel.youtube_refresh_token_enc, env);
+    const detailsResponse = await fetch("https://www.googleapis.com/youtube/v3/videos?part=snippet&id=" + encodeURIComponent(videoId), { headers: { Authorization: "Bearer " + accessToken } });
+    const detailsData = await detailsResponse.json();
+    const item = detailsData.items && detailsData.items[0];
+    if (!detailsResponse.ok) {
+      console.error("YouTube video verification failed:", detailsData.error?.message || detailsResponse.status);
+      return json({ error: "YouTube could not verify that video. Please try again." }, 502);
+    }
+    if (!item || item.snippet?.channelId !== channel.youtube_channel_id) return json({ error: "That video does not belong to the YouTube channel connected to this ER:LC TV channel, or it is unavailable." }, 403);
+
+    const id = crypto.randomUUID();
+    try {
+      await db.prepare("INSERT INTO videos (id, channel_id, youtube_video_id, title, thumbnail_url, description, youtube_published_at, site_publish_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(id, channel.id, videoId, String(item.snippet.title || "YouTube video").slice(0, 200), item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || null, description, youtubePublishedAt, sitePublishAt).run();
+    } catch (error) {
+      console.error("Video listing insert failed:", error);
+      return json({ error: "This video may already be listed. Refresh your video library and try again." }, 409);
+    }
+    const saved = await db.prepare("SELECT id, youtube_video_id, title, thumbnail_url, description, youtube_published_at, site_publish_at, created_at FROM videos WHERE id = ?").bind(id).first();
+    return json({ success: true, video: saved }, 201);
+  }
+
+  const id = String(body.id || "");
+  if (!id) return json({ error: "A video listing ID is required." }, 400);
+  const title = String(body.title || "").trim();
+  if (title.length < 1 || title.length > 200) return json({ error: "Video title must be between 1 and 200 characters." }, 400);
+  const result = await db.prepare("UPDATE videos SET title = ?, description = ?, youtube_published_at = ?, site_publish_at = ? WHERE id = ? AND channel_id = ?")
+    .bind(title, description, youtubePublishedAt, sitePublishAt, id, channel.id).run();
+  if (Number(result.meta?.changes || 0) !== 1) return json({ error: "Video listing not found." }, 404);
+  const updated = await db.prepare("SELECT id, youtube_video_id, title, thumbnail_url, description, youtube_published_at, site_publish_at, created_at FROM videos WHERE id = ?").bind(id).first();
+  return json({ success: true, video: updated });
+}
+
+async function getPublicVideos(url, env) {
+  const slug = makeSlug(url.searchParams.get("slug") || "");
+  if (!slug) return json({ error: "A channel URL is required." }, 400);
+  const db = requireDatabase(env);
+  const channel = await db.prepare("SELECT id FROM channels WHERE slug = ? LIMIT 1").bind(slug).first();
+  if (!channel) return json({ error: "Channel not found." }, 404);
+  const rows = await db.prepare("SELECT id, youtube_video_id, title, thumbnail_url, description, youtube_published_at, site_publish_at FROM videos WHERE channel_id = ? AND site_publish_at <= ? ORDER BY site_publish_at DESC")
+    .bind(channel.id, Math.floor(Date.now() / 1000)).all();
+  return json({ videos: rows.results || [] });
+}
+
+async function getPublicVideo(url, env) {
+  const id = String(url.searchParams.get("id") || "");
+  if (!id) return json({ error: "A video ID is required." }, 400);
+  const db = requireDatabase(env);
+  const video = await db.prepare("SELECT v.id, v.youtube_video_id, v.title, v.thumbnail_url, v.description, v.youtube_published_at, c.name AS channel_name, c.slug AS channel_slug, c.youtube_channel_title, c.youtube_channel_id, c.youtube_thumbnail_url FROM videos v JOIN channels c ON c.id = v.channel_id WHERE v.id = ? AND v.site_publish_at <= ? LIMIT 1")
+    .bind(id, Math.floor(Date.now() / 1000)).first();
+  if (!video) return json({ error: "Video not found." }, 404);
+  return json({ video });
+}
+
+function parseDateInput(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const milliseconds = Date.parse(text);
+  if (!Number.isFinite(milliseconds)) return null;
+  return Math.floor(milliseconds / 1000);
+}
+
+function extractYouTubeVideoId(value) {
+  const input = String(value || "").trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(input)) return input;
+  try {
+    const url = new URL(input);
+    if (url.hostname === "youtu.be" || url.hostname === "www.youtu.be") {
+      const id = url.pathname.split("/").filter(Boolean)[0];
+      return /^[a-zA-Z0-9_-]{11}$/.test(id || "") ? id : null;
+    }
+    if (!["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"].includes(url.hostname)) return null;
+    const id = url.searchParams.get("v") || url.pathname.match(/^\/(?:shorts|embed|live)\/([a-zA-Z0-9_-]{11})/)?.[1];
+    return /^[a-zA-Z0-9_-]{11}$/.test(id || "") ? id : null;
+  } catch { return null; }
+}
+
+async function getYouTubeAccessToken(encryptedToken, env) {
+  const refreshToken = await decryptRefreshToken(encryptedToken, requiredEnv(env, "YOUTUBE_TOKEN_ENCRYPTION_KEY"));
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: requiredEnv(env, "GOOGLE_CLIENT_ID"), client_secret: requiredEnv(env, "GOOGLE_CLIENT_SECRET"), refresh_token: refreshToken, grant_type: "refresh_token" })
+  });
+  const data = await response.json();
+  if (!response.ok || !data.access_token) {
+    console.error("YouTube refresh failed:", JSON.stringify({ status: response.status, error: data.error || "unknown_error" }));
+    throw new Error("Your connected YouTube account needs to be reconnected. Please contact support.");
+  }
+  return data.access_token;
+}
+
+async function decryptRefreshToken(value, base64Key) {
+  const parts = String(value || "").split(".");
+  if (parts.length !== 2) throw new Error("Stored YouTube connection could not be read.");
+  const keyBytes = Uint8Array.from(atob(base64Key), char => char.charCodeAt(0));
+  if (keyBytes.length !== 32) throw new Error("YOUTUBE_TOKEN_ENCRYPTION_KEY must be a Base64-encoded 32-byte key.");
+  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["decrypt"]);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64UrlDecode(parts[0]) }, key, base64UrlDecode(parts[1]));
+  return new TextDecoder().decode(plain);
 }
 
 async function deletePending(db, id) {
