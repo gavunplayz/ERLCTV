@@ -427,8 +427,8 @@ async function manageLiveStreams(request, url, env) {
   if (!sitePublishAt) return json({ error: "Please choose when the live stream should appear on ER:LC TV." }, 400);
 
   if (request.method === "POST") {
-    const videoId = extractYouTubeLive streamId(body.youtubeUrl || body.videoId || "");
-    if (!videoId) return json({ error: "Enter a valid YouTube YouTube live stream URL or live stream ID." }, 400);
+    const videoId = extractYouTubeVideoId(body.youtubeUrl || body.videoId || "");
+    if (!videoId) return json({ error: "Enter a valid YouTube live stream URL or live stream ID." }, 400);
     const existing = await db.prepare("SELECT id FROM live_streams WHERE youtube_video_id = ? LIMIT 1").bind(videoId).first();
     if (existing) return json({ error: "That YouTube live stream is already listed on ER:LC TV." }, 409);
 
