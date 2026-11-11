@@ -425,12 +425,12 @@ async function manageShorts(request, url, env) {
 
   if (request.method === "POST") {
     const shortId = extractYouTubeShortId(body.youtubeUrl || body.shortUrl || "");
-    if (!shortId) return json({ error: "Enter a valid YouTube Short URL or short ID." }, 400);
+    if (!shortId) return json({ error: "Enter a valid YouTube Shorts URL, such as youtube.com/shorts/VIDEO_ID." }, 400);
     const existing = await db.prepare("SELECT id FROM shorts WHERE youtube_short_id = ? LIMIT 1").bind(shortId).first();
     if (existing) return json({ error: "That YouTube Short is already listed on ER:LC TV." }, 409);
 
     const accessToken = await getYouTubeAccessToken(channel.youtube_refresh_token_enc, env);
-    const detailsResponse = await fetch("https://www.googleapis.com/youtube/v3/shorts?part=snippet&id=" + encodeURIComponent(shortId), { headers: { Authorization: "Bearer " + accessToken } });
+    const detailsResponse = await fetch("https://www.googleapis.com/youtube/v3/videos?part=snippet&id=" + encodeURIComponent(shortId), { headers: { Authorization: "Bearer " + accessToken } });
     const detailsData = await detailsResponse.json();
     const item = detailsData.items && detailsData.items[0];
     if (!detailsResponse.ok) {
